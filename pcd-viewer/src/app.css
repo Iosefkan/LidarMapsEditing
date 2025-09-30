@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+/* Theming for sliders and numeric input spinners */
+body { color-scheme: light dark; }
+
+/* Prefer emerald as the accent across controls (checkboxes, range, etc.) */
+:root { accent-color: #10b981; }
+
+input[type="range"] {
+	-webkit-appearance: none;
+	appearance: none;
+	width: 100%;
+	background: transparent;
+}
+
+/* WebKit track */
+input[type="range"]::-webkit-slider-runnable-track {
+	height: 6px;
+	border-radius: 9999px;
+	background: #e5e7eb; /* neutral-200 */
+}
+@media (prefers-color-scheme: dark) {
+	input[type="range"]::-webkit-slider-runnable-track {
+		background: #404040; /* neutral-700 */
+	}
+}
+
+/* WebKit thumb */
+input[type="range"]::-webkit-slider-thumb {
+	-webkit-appearance: none;
+    appearance: none;
+	height: 16px;
+	width: 16px;
+	margin-top: -5px;
+	border-radius: 9999px;
+	background: #10b981;
+	border: 2px solid #ffffff;
+	box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+}
+@media (prefers-color-scheme: dark) {
+	input[type="range"]::-webkit-slider-thumb {
+		border-color: #0a0a0a;
+		box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25);
+	}
+}
+
+/* Firefox track + progress */
+input[type="range"]::-moz-range-track {
+	height: 6px;
+	border-radius: 9999px;
+	background: #e5e7eb;
+}
+@media (prefers-color-scheme: dark) {
+	input[type="range"]::-moz-range-track {
+		background: #404040
+	}
+}
+input[type="range"]::-moz-range-progress {
+	height: 6px;
+	border-radius: 9999px;
+	background: #10b981;
+}
+
+/* NUMBER input spinner arrows */
+input[type="number"] {
+	appearance: auto;
+	width: 100%;
+	color: #111827; /* neutral-900 */
+	background-color: #f5f5f5; /* neutral-100 */
+	border: 1px solid rgba(0,0,0,0.1);
+	border-radius: 0.375rem; /* 6px to match rounded-md */
+	padding: 0.375rem 0.5rem; /* px-2 py-1.5 */
+	line-height: 1.25rem;
+    color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+	input[type="number"] {
+		color: #fafafa; /* neutral-50 */
+		background-color: #1f2937; /* gray-800 */
+		border-color: rgba(255,255,255,0.1);
+        color-scheme: dark;
+	}
+}
+
+/* Focus ring */
+input[type="number"]:focus {
+	outline: none;
+	border-color: #10b981;
+	box-shadow: 0 0 0 2px rgba(16,185,129,0.35);
+}
+@media (prefers-color-scheme: dark) {
+	input[type="number"]:focus {
+		box-shadow: 0 0 0 2px rgba(16,185,129,0.45);
+	}
+}
+
+/* WebKit spinner buttons: keep them, but tint for dark mode */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+	height: auto;
+	margin: 0;
+	background: transparent;
+}
