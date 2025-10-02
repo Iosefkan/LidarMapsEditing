@@ -34,7 +34,14 @@
   let wasControlsEnabled = true
   let resizeObserver: ResizeObserver | null = null
 
-  let dpr = Math.min(window.devicePixelRatio || 1, 2)
+  // Display and performance controls
+  let maxVisiblePoints = 300000
+  let displayToSourceIndex: Uint32Array | null = null
+  let baseDpr = Math.min(window.devicePixelRatio || 1, 2)
+  let currentDpr = baseDpr
+  let interactiveDpr = Math.min(1, baseDpr)
+  let isInteracting = false
+  let renderScheduled = false
 
   // Expose undo availability to parent via bind:canUndo
   export let canUndo = false
@@ -162,23 +169,6 @@
       mergedCol.set(toAdd, existing.length)
     }
 
-    const geom = new THREE.BufferGeometry()
-    geom.setAttribute('position', new THREE.BufferAttribute(mergedPos, 3))
-    if (mergedCol) {
-      geom.setAttribute('color', new THREE.BufferAttribute(mergedCol, 3))
-    }
-    geom.computeBoundingSphere()
-    geom.computeBoundingBox()
-
-    const material = points.material as THREE.PointsMaterial
-    scene.remove(points)
-    ;(points.geometry as THREE.BufferGeometry).dispose()
-    points = new THREE.Points(geom, material)
-    points.frustumCulled = false
-    ;(points.material as THREE.PointsMaterial).vertexColors = true
-    ;(points.material as THREE.PointsMaterial).needsUpdate = true
-    scene.add(points)
-
     positionsArray = mergedPos
     colorsArray = mergedCol
     originalColorsArray = mergedCol ? new Float32Array(mergedCol) : null
@@ -186,6 +176,8 @@
     selectionRect = null
     canUndo = false
     pointCount = positionsArray.length / 3
+    rebuildDisplayGeometry()
+    requestRender()
   }
 
   export function deleteSelection() {
@@ -222,22 +214,6 @@
       }
     }
 
-    const geom = new THREE.BufferGeometry()
-    geom.setAttribute('position', new THREE.BufferAttribute(newPositions, 3))
-    if (newColors) {
-      geom.setAttribute('color', new THREE.BufferAttribute(newColors, 3))
-    }
-    geom.computeBoundingSphere()
-
-    const material = points.material as THREE.PointsMaterial
-    scene.remove(points)
-    ;(points.geometry as THREE.BufferGeometry).dispose()
-    points = new THREE.Points(geom, material)
-    points.frustumCulled = false
-    ;(points.material as THREE.PointsMaterial).vertexColors = true
-    ;(points.material as THREE.PointsMaterial).needsUpdate = true
-    scene.add(points)
-
     positionsArray = newPositions
     colorsArray = newColors
     originalColorsArray = newColors ? new Float32Array(newColors) : null
@@ -245,6 +221,8 @@
     selectionRect = null
     canUndo = true
     isDirty = true
+    rebuildDisplayGeometry()
+    requestRender()
   }
 
   export function undoLastDeletion() {
@@ -252,23 +230,6 @@
 
     const restoredPositions = lastPositionsSnapshot
     const restoredColors = lastColorsSnapshot
-
-    const geom = new THREE.BufferGeometry()
-    geom.setAttribute('position', new THREE.BufferAttribute(restoredPositions, 3))
-    if (restoredColors) {
-      geom.setAttribute('color', new THREE.BufferAttribute(restoredColors, 3))
-    }
-    geom.computeBoundingSphere()
-    geom.computeBoundingBox()
-
-    const material = points.material as THREE.PointsMaterial
-    scene.remove(points)
-    ;(points.geometry as THREE.BufferGeometry).dispose()
-    points = new THREE.Points(geom, material)
-    points.frustumCulled = false
-    ;(points.material as THREE.PointsMaterial).vertexColors = true
-    ;(points.material as THREE.PointsMaterial).needsUpdate = true
-    scene.add(points)
 
     positionsArray = restoredPositions
     colorsArray = restoredColors
@@ -288,6 +249,77 @@
     canUndo = false
     // restored to previous, assume no dirty changes left for this simple model
     isDirty = false
+    rebuildDisplayGeometry()
+    requestRender()
+  }
+
+  function rebuildDisplayGeometry() {
+    if (!positionsArray) return
+    const totalPoints = positionsArray.length / 3
+    const useColors = !!colorsArray
+
+    let outPositions: Float32Array
+    let outColors: Float32Array | null = null
+    let map: Uint32Array
+
+    if (totalPoints <= maxVisiblePoints) {
+      // Use source arrays directly when under cap
+      outPositions = positionsArray
+      outColors = colorsArray ? colorsArray : null
+      // identity mapping
+      map = new Uint32Array(totalPoints)
+      for (let i = 0; i < totalPoints; i++) map[i] = i
+    } else {
+      // Strided sampling with pseudo-random offset for uniform coverage
+      const step = Math.ceil(totalPoints / maxVisiblePoints)
+      const offset = (totalPoints % step)
+      const outCount = Math.floor((totalPoints - offset + step - 1) / step)
+      const targetCount = Math.min(maxVisiblePoints, outCount)
+      outPositions = new Float32Array(targetCount * 3)
+      outColors = useColors ? new Float32Array(targetCount * 3) : null
+      map = new Uint32Array(targetCount)
+      let w = 0
+      for (let i = offset; i < totalPoints && w < targetCount; i += step) {
+        const r = i * 3
+        outPositions[w * 3] = positionsArray[r]
+        outPositions[w * 3 + 1] = positionsArray[r + 1]
+        outPositions[w * 3 + 2] = positionsArray[r + 2]
+        if (outColors && colorsArray) {
+          outColors[w * 3] = colorsArray[r]
+          outColors[w * 3 + 1] = colorsArray[r + 1]
+          outColors[w * 3 + 2] = colorsArray[r + 2]
+        }
+        map[w] = i
+        w++
+      }
+    }
+
+    const geom = new THREE.BufferGeometry()
+    geom.setAttribute('position', new THREE.BufferAttribute(outPositions, 3))
+    if (!outColors) {
+      // Create default display colors if absent
+      outColors = new Float32Array((outPositions.length / 3) * 3)
+      const [r,g,b] = defaultColor
+      for (let i = 0; i < outColors.length; i += 3) { outColors[i]=r; outColors[i+1]=g; outColors[i+2]=b }
+    }
+    geom.setAttribute('color', new THREE.BufferAttribute(outColors, 3))
+    originalColorsArray = new Float32Array(outColors)
+    geom.computeBoundingSphere()
+    geom.computeBoundingBox()
+
+    const material = points ? (points.material as THREE.PointsMaterial) : new THREE.PointsMaterial({ size: 1.2, sizeAttenuation: true, vertexColors: true })
+    if (points) {
+      scene.remove(points)
+      ;(points.geometry as THREE.BufferGeometry).dispose()
+    }
+    points = new THREE.Points(geom, material)
+    points.frustumCulled = true
+    ;(points.material as THREE.PointsMaterial).vertexColors = true
+    ;(points.material as THREE.PointsMaterial).needsUpdate = true
+    scene.add(points)
+
+    displayToSourceIndex = map
+    pointCount = positionsArray.length / 3
   }
 
   function setupPoints(obj: THREE.Points) {
@@ -308,28 +340,9 @@
 
     const colorAttr = srcGeom.getAttribute('color') as THREE.BufferAttribute | undefined
     colorsArray = colorAttr ? new Float32Array(colorAttr.array as ArrayLike<number>) : null
-
-    const geom = new THREE.BufferGeometry()
-    geom.setAttribute('position', new THREE.BufferAttribute(positionsArray, 3))
-    if (!colorsArray) {
-      // Create default colors if absent
-      colorsArray = new Float32Array((positionsArray.length / 3) * 3)
-      const [r,g,b] = defaultColor
-      for (let i = 0; i < colorsArray.length; i += 3) {
-        colorsArray[i] = r
-        colorsArray[i + 1] = g
-        colorsArray[i + 2] = b
-      }
-    }
-    geom.setAttribute('color', new THREE.BufferAttribute(colorsArray, 3))
-    originalColorsArray = new Float32Array(colorsArray)
-    geom.computeBoundingSphere()
-    geom.computeBoundingBox()
-
-    points = new THREE.Points(geom, material)
-    ;(points.material as THREE.PointsMaterial).vertexColors = true
-    ;(points.material as THREE.PointsMaterial).needsUpdate = true
-    scene.add(points)
+    // Build display geometry with LOD
+    points = new THREE.Points(new THREE.BufferGeometry(), material)
+    rebuildDisplayGeometry()
     fitCameraToObject(points)
     // Reset undo availability on new data
     canUndo = false
@@ -338,6 +351,7 @@
     lastOriginalColorsSnapshot = null
     pointCount = positionsArray.length / 3
     isDirty = false
+    requestRender()
   }
 
   function restoreOriginalColors() {
@@ -363,7 +377,8 @@
     const highlightR = selectionColor[0], highlightG = selectionColor[1], highlightB = selectionColor[2]
     for (let i = 0; i < count; i++) {
       const j = i * 3
-      if (mask[i] === 1) {
+      const srcIdx = displayToSourceIndex ? displayToSourceIndex[i] : i
+      if (mask[srcIdx] === 1) {
         arr[j] = highlightR
         arr[j + 1] = highlightG
         arr[j + 2] = highlightB
@@ -374,6 +389,7 @@
       }
     }
     colorAttr.needsUpdate = true
+    requestRender()
   }
 
   function fitCameraToObject(object: THREE.Object3D) {
@@ -413,7 +429,7 @@
     camera.position.set(0, 0, 10)
 
     renderer = new THREE.WebGLRenderer({ canvas: canvas!, antialias: false, powerPreference: 'high-performance', alpha: false, depth: true, logarithmicDepthBuffer: true })
-    renderer.setPixelRatio(dpr)
+    renderer.setPixelRatio(currentDpr)
     renderer.setSize(container.clientWidth, container.clientHeight)
 
     controls = new OrbitControls(camera, renderer.domElement)
@@ -439,7 +455,10 @@
     dir.position.set(1, 1, 1)
     scene.add(dir)
 
-    // FPS counter removed
+    // Render on demand, and live during interactions
+    controls.addEventListener('start', onControlsStart)
+    controls.addEventListener('change', onControlsChange)
+    controls.addEventListener('end', onControlsEnd)
 
     selectionWorker = new Worker(new URL('../workers/selectionWorker.ts', import.meta.url), { type: 'module' })
     selectionWorker.onmessage = (e: MessageEvent) => {
@@ -450,6 +469,7 @@
       // Clear rectangle overlay after selection completes
       selectionRect = null
       selectionPolygon = null
+      requestRender()
     }
 
     window.addEventListener('resize', onWindowResize)
@@ -474,7 +494,7 @@
       resizeObserver.observe(container)
     } catch {}
 
-    animate()
+    requestRender()
   }
 
   function onWindowResize() {
@@ -488,6 +508,8 @@
       overlayCanvas.width = width
       overlayCanvas.height = height
     }
+    drawSelectionOverlay()
+    requestRender()
   }
 
   function screenRect() {
@@ -524,6 +546,7 @@
     try { (ev.target as Element).setPointerCapture?.(ev.pointerId) } catch {}
     ev.preventDefault()
     ev.stopImmediatePropagation?.()
+    drawSelectionOverlay()
   }
 
   function onPointerMove(ev: PointerEvent) {
@@ -543,6 +566,7 @@
     }
     ev.preventDefault()
     ev.stopImmediatePropagation?.()
+    drawSelectionOverlay()
   }
 
   function onPointerUp() {
@@ -618,7 +642,7 @@
     // Convert a small pixel radius to world-units threshold at current distance
     const distance = camera.position.distanceTo(controls.target)
     const worldPerPixel = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * distance / Math.max(1, container.clientHeight)
-    const pixelRadius = Math.max(6, 12 * dpr)
+    const pixelRadius = Math.max(6, 12 * currentDpr)
     raycaster.params.Points = { threshold: worldPerPixel * pixelRadius } as any
 
     let clickedX: number | null = null
@@ -643,7 +667,7 @@
         const tmp = new THREE.Vector4()
         let bestIdx = -1
         let bestD2 = Infinity
-        const maxR = Math.max(6, 12 * dpr)
+        const maxR = Math.max(6, 12 * currentDpr)
         const maxR2 = maxR * maxR
         const countTotal = positionsArray.length / 3
         for (let i = 0; i < countTotal; i++) {
@@ -760,13 +784,47 @@
     camera.position.addScaledVector(dir, step)
     controls.target.addScaledVector(dir, step)
     controls.update()
+    requestRender()
+  }
+  function requestRender() {
+    if (renderScheduled) return
+    renderScheduled = true
+    requestAnimationFrame(() => {
+      renderScheduled = false
+      renderer.render(scene, camera)
+      drawSelectionOverlay()
+    })
   }
 
-  function animate() {
-    controls.update()
-    renderer.render(scene, camera)
-    drawSelectionOverlay()
-    requestAnimationFrame(animate)
+  function onControlsStart() {
+    isInteracting = true
+    currentDpr = interactiveDpr
+    renderer.setPixelRatio(currentDpr)
+    let last = performance.now()
+    const loop = () => {
+      if (!isInteracting) return
+      const now = performance.now()
+      // cap to ~60fps
+      if (now - last >= 14) {
+        controls.update()
+        renderer.render(scene, camera)
+        drawSelectionOverlay()
+        last = now
+      }
+      requestAnimationFrame(loop)
+    }
+    loop()
+  }
+
+  function onControlsChange() {
+    if (!isInteracting) requestRender()
+  }
+
+  function onControlsEnd() {
+    isInteracting = false
+    currentDpr = baseDpr
+    renderer.setPixelRatio(currentDpr)
+    requestRender()
   }
 
   // Toggle rotation while in add mode to avoid conflicts; keep rotation in delta
@@ -802,6 +860,11 @@
     window.removeEventListener('pointerup', onPointerUp)
     renderer?.domElement?.removeEventListener('click', onCanvasClick)
     renderer?.domElement?.removeEventListener('wheel', onWheel)
+    try {
+      controls?.removeEventListener('start', onControlsStart)
+      controls?.removeEventListener('change', onControlsChange)
+      controls?.removeEventListener('end', onControlsEnd)
+    } catch {}
     selectionWorker?.terminate()
     try { resizeObserver?.disconnect() } catch {}
     clear()
