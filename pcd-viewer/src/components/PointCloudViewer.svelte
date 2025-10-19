@@ -81,17 +81,37 @@
   export async function loadPCDFromURL(url: string) {
     const { PCDLoader } = await import('three-stdlib')
     const loader = new PCDLoader()
-    return new Promise<void>((resolve, reject) => {
-      loader.load(
-        url,
-        (obj: THREE.Points) => {
-          setupPoints(obj)
-          resolve()
-        },
-        undefined,
-        (err: ErrorEvent) => reject(err)
-      )
-    })
+    // Pre-fetch to validate status and content-type, then load via blob URL to avoid CORS/presign issues
+    const res = await fetch(url)
+    if (!res.ok) {
+      let body = ''
+      try { body = (await res.text()).slice(0, 300) } catch {}
+      throw new Error(`Failed to load PCD (${res.status} ${res.statusText}). ${body}`)
+    }
+    const ct = (res.headers.get('Content-Type') || '').toLowerCase()
+    if (ct.includes('text/html') || ct.includes('application/json')) {
+      let body = ''
+      try { body = (await res.text()).slice(0, 300) } catch {}
+      throw new Error(`Unexpected response type ${ct}. ${body}`)
+    }
+    const blob = await res.blob()
+    if (!blob || blob.size === 0) throw new Error('Empty PCD file')
+    const objectUrl = URL.createObjectURL(blob)
+    try {
+      await new Promise<void>((resolve, reject) => {
+        loader.load(
+          objectUrl,
+          (obj: THREE.Points) => {
+            setupPoints(obj)
+            resolve()
+          },
+          undefined,
+          (err: ErrorEvent) => reject(err)
+        )
+      })
+    } finally {
+      URL.revokeObjectURL(objectUrl)
+    }
   }
 
   export async function loadPCDFile(file: File) {
@@ -337,6 +357,16 @@
     const srcGeom = obj.geometry as THREE.BufferGeometry
     const pos = srcGeom.getAttribute('position') as THREE.BufferAttribute
     positionsArray = new Float32Array(pos.array as ArrayLike<number>)
+    // Validate coordinates to avoid NaN/Infinity breaking bounds
+    let valid = true
+    for (let i = 0; i < positionsArray.length; i += 3) {
+      const x = positionsArray[i], y = positionsArray[i+1], z = positionsArray[i+2]
+      if (!isFinite(x) || !isFinite(y) || !isFinite(z)) { valid = false; break }
+    }
+    if (!valid) {
+      positionsArray = null
+      throw new Error('PCD contains invalid coordinates (NaN/Infinity)')
+    }
 
     const colorAttr = srcGeom.getAttribute('color') as THREE.BufferAttribute | undefined
     colorsArray = colorAttr ? new Float32Array(colorAttr.array as ArrayLike<number>) : null

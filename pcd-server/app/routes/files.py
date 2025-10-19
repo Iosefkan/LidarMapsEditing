@@ -83,7 +83,7 @@ async def upload_file(file: UploadFile = File(...)):
     finally:
         con.close()
 
-    url = presigned_get_object(client, settings.minio_bucket, key, expiry_seconds=3600)
+    url = f"/api/files/{file_id}/original"
     return FileRecord(
         id=file_id,
         filename=rec["filename"],
