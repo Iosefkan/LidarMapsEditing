@@ -276,53 +276,24 @@
   function rebuildDisplayGeometry() {
     if (!positionsArray) return
     const totalPoints = positionsArray.length / 3
-    const useColors = !!colorsArray
 
-    let outPositions: Float32Array
-    let outColors: Float32Array | null = null
-    let map: Uint32Array
-
-    if (totalPoints <= maxVisiblePoints) {
-      // Use source arrays directly when under cap
-      outPositions = positionsArray
-      outColors = colorsArray ? colorsArray : null
-      // identity mapping
-      map = new Uint32Array(totalPoints)
-      for (let i = 0; i < totalPoints; i++) map[i] = i
-    } else {
-      // Strided sampling with pseudo-random offset for uniform coverage
-      const step = Math.ceil(totalPoints / maxVisiblePoints)
-      const offset = (totalPoints % step)
-      const outCount = Math.floor((totalPoints - offset + step - 1) / step)
-      const targetCount = Math.min(maxVisiblePoints, outCount)
-      outPositions = new Float32Array(targetCount * 3)
-      outColors = useColors ? new Float32Array(targetCount * 3) : null
-      map = new Uint32Array(targetCount)
-      let w = 0
-      for (let i = offset; i < totalPoints && w < targetCount; i += step) {
-        const r = i * 3
-        outPositions[w * 3] = positionsArray[r]
-        outPositions[w * 3 + 1] = positionsArray[r + 1]
-        outPositions[w * 3 + 2] = positionsArray[r + 2]
-        if (outColors && colorsArray) {
-          outColors[w * 3] = colorsArray[r]
-          outColors[w * 3 + 1] = colorsArray[r + 1]
-          outColors[w * 3 + 2] = colorsArray[r + 2]
-        }
-        map[w] = i
-        w++
-      }
-    }
+    let outPositions: Float32Array = positionsArray
+    let outColors: Float32Array | null = colorsArray ? colorsArray : null
+    // No subsampling: mapping not needed
 
     const geom = new THREE.BufferGeometry()
-    geom.setAttribute('position', new THREE.BufferAttribute(outPositions, 3))
+    const posAttr = new THREE.BufferAttribute(outPositions, 3)
+    posAttr.setUsage(THREE.StaticDrawUsage)
+    geom.setAttribute('position', posAttr)
     if (!outColors) {
       // Create default display colors if absent
       outColors = new Float32Array((outPositions.length / 3) * 3)
       const [r,g,b] = defaultColor
       for (let i = 0; i < outColors.length; i += 3) { outColors[i]=r; outColors[i+1]=g; outColors[i+2]=b }
     }
-    geom.setAttribute('color', new THREE.BufferAttribute(outColors, 3))
+    const colAttr = new THREE.BufferAttribute(outColors, 3)
+    colAttr.setUsage(THREE.StaticDrawUsage)
+    geom.setAttribute('color', colAttr)
     originalColorsArray = new Float32Array(outColors)
     geom.computeBoundingSphere()
     geom.computeBoundingBox()
@@ -338,7 +309,7 @@
     ;(points.material as THREE.PointsMaterial).needsUpdate = true
     scene.add(points)
 
-    displayToSourceIndex = map
+    displayToSourceIndex = null
     pointCount = positionsArray.length / 3
   }
 
@@ -461,6 +432,7 @@
     renderer = new THREE.WebGLRenderer({ canvas: canvas!, antialias: false, powerPreference: 'high-performance', alpha: false, depth: true, logarithmicDepthBuffer: true })
     renderer.setPixelRatio(currentDpr)
     renderer.setSize(container.clientWidth, container.clientHeight)
+    renderer.sortObjects = false
 
     controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
