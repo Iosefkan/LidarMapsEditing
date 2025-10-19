@@ -32,6 +32,8 @@
     hough_min_len: 10,
     hough_min_w: 1.0,
     hough_max_w: 3.5,
+    hough_max_len: 20.0,
+    hough_fill_min: 0.25,
     hough_dilate: 1,
   }
 

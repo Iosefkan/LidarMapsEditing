@@ -28,6 +28,8 @@ export type CleanParams = {
   hough_min_len?: number
   hough_min_w?: number
   hough_max_w?: number
+  hough_max_len?: number
+  hough_fill_min?: number
   hough_dilate?: number
   debug_dump?: boolean
 }

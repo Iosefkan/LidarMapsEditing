@@ -77,6 +77,8 @@
           <label>hough_min_len <input class="w-full" type="number" step="0.1" bind:value={params.hough_min_len}></label>
           <label>hough_min_w <input class="w-full" type="number" step="0.1" bind:value={params.hough_min_w}></label>
           <label>hough_max_w <input class="w-full" type="number" step="0.1" bind:value={params.hough_max_w}></label>
+          <label>hough_max_len <input class="w-full" type="number" step="0.1" bind:value={params.hough_max_len}></label>
+          <label>hough_fill_min <input class="w-full" type="number" step="0.01" bind:value={params.hough_fill_min}></label>
           <label>hough_dilate <input class="w-full" type="number" step="1" bind:value={params.hough_dilate}></label>
         </div>
       {/if}

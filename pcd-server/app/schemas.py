@@ -32,6 +32,8 @@ class CleanRequest(BaseModel):
     hough_min_len: float = Field(8.0)
     hough_min_w: float = Field(1.0)
     hough_max_w: float = Field(4.5)
+    hough_max_len: float = Field(20.0)
+    hough_fill_min: float = Field(0.25)
     hough_dilate: int = Field(1)
     debug_dump: bool = Field(False)
 

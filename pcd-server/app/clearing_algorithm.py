@@ -87,6 +87,31 @@ def xy_to_cell(xy: np.ndarray, origin: Tuple[float,float], grid: float, W:int, H
     valid=(ix>=0)&(iy>=0)&(ix<W)&(iy<H)
     return ix,iy,valid
 
+# ---------- оценка доли "земля-смеси" по клеткам ----------
+def compute_ground_mix(P: np.ndarray, ix: np.ndarray, iy: np.ndarray, valid_pts: np.ndarray,
+                       z_ground: np.ndarray, W: int, H: int, ground_eps: float) -> np.ndarray:
+    """
+    Возвращает матрицу HxW с долей точек вблизи земли (|z - z_ground| <= ground_eps) в каждой клетке.
+    Клетки без точек получают значение 1.0 (консервативно считаем, что там "земля").
+    """
+    cnt_total = np.zeros((H, W), dtype=np.int32)
+    cnt_near = np.zeros((H, W), dtype=np.int32)
+    if valid_pts.any():
+        iyv = iy[valid_pts]; ixv = ix[valid_pts]
+        zg = z_ground[iyv, ixv]
+        ok = ~np.isnan(zg)
+        if ok.any():
+            iy_ok = iyv[ok]; ix_ok = ixv[ok]
+            dz = P[valid_pts, 2][ok] - zg[ok]
+            near = np.abs(dz) <= ground_eps
+            np.add.at(cnt_total, (iy_ok, ix_ok), 1)
+            if near.any():
+                np.add.at(cnt_near, (iy_ok[near], ix_ok[near]), 1)
+    ground_mix = np.ones((H, W), dtype=np.float64)
+    m = cnt_total > 0
+    ground_mix[m] = cnt_near[m] / cnt_total[m]
+    return ground_mix
+
 # ---------- НОВОЕ: Hough-полосы ----------
 def detect_hough_bands(G: Grid2p5D, cand: np.ndarray,
                        theta_step_deg: float = 5.0,
@@ -95,6 +120,8 @@ def detect_hough_bands(G: Grid2p5D, cand: np.ndarray,
                        min_len_m: float = 8.0,
                        min_width_m: float = 1.0,
                        max_width_m: float = 4.5,
+                       max_len_m: float = 20.0,
+                       fill_min: float = 0.25,
                        dilate_cells: int = 1) -> np.ndarray:
     """
     Ищем длинные полосы в бинарной карте cand (без требования связности).
@@ -173,9 +200,17 @@ def detect_hough_bands(G: Grid2p5D, cand: np.ndarray,
         L = t[in_band].max() - t[in_band].min()
         if L < min_len_m:
             continue
+        if max_len_m is not None and L > max_len_m:
+            # слишком длинная полоса — вероятный артефакт, не учитываем
+            continue
         # оценим фактическую ширину по 90-му процентилю
         w_est = 2.0 * np.quantile(d[in_band], 0.9)
         if not (min_width_m <= w_est <= max_width_m):
+            continue
+        # требуем достаточную заполненность полосы кандидатами
+        rect_cells_est = max(1.0, (L / G.grid) * (w_est / G.grid))
+        fill_ratio = float(in_band.sum()) / rect_cells_est
+        if fill_ratio < fill_min:
             continue
         # отметим клетки
         idx_lin = ys*G.W + xs
@@ -204,9 +239,11 @@ def process(in_path: str, out_path: str,
             h_min: float=0.20, h_max: float=3.0,
             min_len: float=3.0, min_width: float=1.4, max_width: float=3.5,
             min_elong: float=2.2, density_min: int=5,
+            ground_eps: float=0.12, ground_mix_tol: float=0.25, comp_fill_min: float=0.45,
             use_hough: bool=False,
             hough_theta_step: float=5.0, hough_rho_bin: float=0.5, hough_topk: int=8,
             hough_min_len: float=8.0, hough_min_w: float=1.0, hough_max_w: float=4.5,
+            hough_max_len: float=20.0, hough_fill_min: float=0.25,
             hough_dilate: int=1,
             debug_dump: bool=False,
             delta_out_path: str | None = None):
@@ -226,6 +263,10 @@ def process(in_path: str, out_path: str,
 
     valid = (~np.isnan(dh)) & (G.count >= density_min)
     cand = valid & (dh >= h_min) & (dh <= h_max)
+
+    # Оценим долю точек вблизи земли на клетку и используем далее как признак статичности
+    ix_all, iy_all, valid_pts_all = xy_to_cell(P[:,:2], G.origin, G.grid, G.W, G.H)
+    ground_mix = compute_ground_mix(P, ix_all, iy_all, valid_pts_all, z_ground, G.W, G.H, ground_eps)
 
     # 2) компонентная логика (как была)
     comps = connected_components(cand)
@@ -247,6 +288,19 @@ def process(in_path: str, out_path: str,
         if width  < min_width:          continue
         if width  > max_width:          continue
         if (length / max(width,1e-6)) < min_elong: continue
+
+        # Доп. фильтр: требуем разумную заполненность оценочного прямоугольника
+        rect_cells_est = max(1.0, (length / G.grid) * (width / G.grid))
+        fill_ratio = float(comp.size) / rect_cells_est
+        if fill_ratio < comp_fill_min:
+            continue
+
+        # Доп. фильтр: доля клеток с низкой долей земли (движущиеся объекты часто "над землёй")
+        gm = ground_mix[ys, xs]
+        ground_free_frac = float((gm < ground_mix_tol).mean())
+        if ground_free_frac < 0.25:
+            continue
+
         keep.reshape(-1)[comp] = True
         sel += 1
     log(f"Компонент после фильтров (PCA): {sel}")
@@ -261,9 +315,13 @@ def process(in_path: str, out_path: str,
             min_len_m=hough_min_len,
             min_width_m=hough_min_w,
             max_width_m=hough_max_w,
+            max_len_m=hough_max_len,
+            fill_min=hough_fill_min,
             dilate_cells=hough_dilate
         )
         log(f"Hough-полосы: клеток в маске = {int(band_mask.sum())}")
+        # Отбросим полосы, где большинство клеток имеют высокую долю земли (скорее статичны)
+        band_mask &= (ground_mix < ground_mix_tol)
         keep |= band_mask
 
     # 4) перенос на точки и удаление
@@ -326,13 +384,18 @@ def process(in_path: str, out_path: str,
         "h_min": h_min, "h_max": h_max,
         "min_len": min_len, "min_width": min_width, "max_width": max_width,
         "min_elong": min_elong, "density_min": density_min,
+        "ground_eps": ground_eps, 
+        "ground_mix_tol": ground_mix_tol, 
+        "comp_fill_min": comp_fill_min,
         "hough_used": bool(use_hough),
         "hough_theta_step": hough_theta_step,
         "hough_rho_bin": hough_rho_bin,
         "hough_topk": hough_topk,
         "hough_min_len": hough_min_len,
         "hough_min_w": hough_min_w,
-        "hough_max_w": hough_max_w
+        "hough_max_w": hough_max_w,
+        "hough_max_len": hough_max_len,
+        "hough_fill_min": hough_fill_min
     }
     with open(os.path.splitext(out_path)[0]+"_summary.json","w",encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
@@ -353,6 +416,9 @@ def main():
     ap.add_argument("--max_width", type=float, default=3.5)
     ap.add_argument("--min_elong", type=float, default=2.2)
     ap.add_argument("--density_min", type=int, default=5)
+    ap.add_argument("--ground_eps", type=float, default=0.12)
+    ap.add_argument("--ground_mix_tol", type=float, default=0.25)
+    ap.add_argument("--comp_fill_min", type=float, default=0.45)
     ap.add_argument("--use_hough", action="store_true")
     ap.add_argument("--hough_theta_step", type=float, default=5.0)
     ap.add_argument("--hough_rho_bin", type=float, default=0.5)
@@ -360,6 +426,8 @@ def main():
     ap.add_argument("--hough_min_len", type=float, default=8.0)
     ap.add_argument("--hough_min_w", type=float, default=1.0)
     ap.add_argument("--hough_max_w", type=float, default=4.5)
+    ap.add_argument("--hough_max_len", type=float, default=20.0)
+    ap.add_argument("--hough_fill_min", type=float, default=0.25)
     ap.add_argument("--hough_dilate", type=int, default=1)
     ap.add_argument("--debug_dump", action="store_true")
     args=ap.parse_args()
@@ -370,6 +438,7 @@ def main():
             h_min=args.h_min, h_max=args.h_max,
             min_len=args.min_len, min_width=args.min_width, max_width=args.max_width,
             min_elong=args.min_elong, density_min=args.density_min,
+            ground_eps=args.ground_eps, ground_mix_tol=args.ground_mix_tol, comp_fill_min=args.comp_fill_min,
             use_hough=args.use_hough,
             hough_theta_step=args.hough_theta_step,
             hough_rho_bin=args.hough_rho_bin,
@@ -377,6 +446,8 @@ def main():
             hough_min_len=args.hough_min_len,
             hough_min_w=args.hough_min_w,
             hough_max_w=args.hough_max_w,
+            hough_max_len=args.hough_max_len,
+            hough_fill_min=args.hough_fill_min,
             hough_dilate=args.hough_dilate,
             debug_dump=args.debug_dump)
 

@@ -29,6 +29,8 @@ def run_clean_process(in_path: str, out_path: str, params: CleanRequest, delta_o
         hough_min_len=params.hough_min_len,
         hough_min_w=params.hough_min_w,
         hough_max_w=params.hough_max_w,
+        hough_max_len=params.hough_max_len,
+        hough_fill_min=params.hough_fill_min,
         hough_dilate=params.hough_dilate,
         debug_dump=params.debug_dump,
         delta_out_path=delta_out_path,
